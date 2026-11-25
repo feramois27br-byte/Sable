@@ -1,0 +1,70 @@
+name: Build Sable levipack
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extrair o projeto
+        run: |
+          test -f sable-levipack.zip || { echo "Suba o sable-levipack.zip na raiz do repositorio"; exit 1; }
+          unzip -q -o sable-levipack.zip
+
+      - name: Testes da fisica (PC)
+        working-directory: sable-levipack
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -o physics_test tests/physics_test.cpp src/physics/Sable.cpp
+          ./physics_test
+
+      - name: Baixar preloader-android (headers pl/)
+        working-directory: sable-levipack
+        run: git clone --depth 1 --recursive --shallow-submodules https://github.com/LiteLDev/preloader-android preloader-android
+
+      - name: Instalar NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28c
+
+      - name: Compilar arm64-v8a
+        working-directory: sable-levipack
+        run: |
+          TOOLCHAIN="${{ steps.ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake"
+          COMMON="-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 -DCMAKE_BUILD_TYPE=Release"
+          if ! cmake -S . -B build $COMMON -DSABLE_LINK_PRELOADER=ON; then
+            echo "Configuracao com preloader falhou; tentando sem linkar o preloader"
+            rm -rf build
+            cmake -S . -B build $COMMON -DSABLE_LINK_PRELOADER=OFF
+          fi
+          cmake --build build --target sable
+
+      - name: Empacotar .levipack
+        working-directory: sable-levipack
+        run: |
+          mkdir -p pkg
+          cp manifest.json pkg/
+          cp build/out/arm64-v8a/libsable.so pkg/
+          (cd pkg && zip -r ../sable.levipack manifest.json libsable.so)
+          unzip -l sable.levipack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sable-levipack
+          path: sable-levipack/sable.levipack
+
+      - name: Publicar em Releases (download direto no celular)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Sable levipack build ${{ github.run_number }}
+          files: sable-levipack/sable.levipack
+          
